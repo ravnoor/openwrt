@@ -137,6 +137,27 @@ define Device/aruba_ap-32x
 endef
 TARGET_DEVICES += aruba_ap-32x
 
+define Device/aruba_ap-325-v0
+	$(call Device/LegacyImage)
+	DEVICE_VENDOR := Aruba
+	DEVICE_MODEL := AP-325
+	DEVICE_VARIANT := v0 (256 MiB RAM)
+	SOC := qcom-ipq8068
+	DEVICE_DTS := qcom-ipq8068-ap-325-v0
+	PAGESIZE := 2048
+	BLOCKSIZE := 128k
+	KERNEL_SUFFIX := .ari
+	KERNEL = kernel-bin | append-dtb | uImage none | apboot-addfwhdr Octomore
+	KERNEL_LOADADDR = 0x41508000
+	KERNEL_SIZE := 30720k
+	UBOOT_PATH := $$(STAGING_DIR_IMAGE)/aruba_ap-32x-apboot.mbn
+	ARTIFACTS := apboot.mbn
+	ARTIFACT/apboot.mbn := append-uboot
+	DEVICE_PACKAGES := ath10k-firmware-qca99x0-ct kmod-i2c-gpio kmod-tpm-i2c-atmel \
+		apboot-aruba-ipq806x
+endef
+TARGET_DEVICES += aruba_ap-325-v0
+
 define Device/askey_rt4230w-rev6
 	$(call Device/LegacyImage)
 	$(Device/dsa-migration)

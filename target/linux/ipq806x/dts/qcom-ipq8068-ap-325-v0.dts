@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+
+#include "qcom-ipq8068-ap-32x.dts"
+
+/ {
+	model = "Aruba AP-325 v0";
+	compatible = "aruba,ap-325-v0", "aruba,ap-32x", "qcom,ipq8064";
+
+	memory@0 {
+		reg = <0x41500000 0x0eb00000>;
+		device_type = "memory";
+	};
+};

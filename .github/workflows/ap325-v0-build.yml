@@ -1,0 +1,138 @@
+name: AP-325 v0 firmware
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ap325-v0-build.yml'
+      - 'Dockerfile'
+      - 'target/linux/ipq806x/**'
+      - 'package/boot/**'
+      - 'package/base-files/**'
+      - 'include/**'
+      - 'scripts/aruba-header.py'
+  pull_request:
+    paths:
+      - '.github/workflows/ap325-v0-build.yml'
+      - 'Dockerfile'
+      - 'target/linux/ipq806x/**'
+      - 'package/boot/**'
+      - 'package/base-files/**'
+      - 'include/**'
+      - 'scripts/aruba-header.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ap325-v0-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare build cache directories
+        run: |
+          mkdir -p "$RUNNER_TEMP/openwrt-dl" "$RUNNER_TEMP/openwrt-ccache"
+
+      - name: Cache OpenWrt downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/openwrt-dl
+          key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('include/download.mk', 'scripts/download.pl') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-dl-${{ hashFiles('include/download.mk', 'scripts/download.pl') }}-
+
+      - name: Cache ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/openwrt-ccache
+          key: ${{ runner.os }}-openwrt-ccache-${{ hashFiles('Dockerfile', 'target/linux/ipq806x/config-*', 'target/linux/ipq806x/Makefile') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-ccache-${{ hashFiles('Dockerfile', 'target/linux/ipq806x/config-*', 'target/linux/ipq806x/Makefile') }}-
+
+      - name: Build in the repository Dockerfile environment
+        run: |
+          docker build --platform linux/arm64 \
+            --build-arg UID="$(id -u)" \
+            --build-arg GID="$(id -g)" \
+            -t openwrt-ap325-builder:ci .
+
+          docker run --rm --platform linux/arm64 \
+            -e FORCE_UNSAFE_CONFIGURE=1 \
+            -e CCACHE_DIR=/work/ccache \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$RUNNER_TEMP/openwrt-dl:/work/dl" \
+            -v "$RUNNER_TEMP/openwrt-ccache:/work/ccache" \
+            -w /work openwrt-ap325-builder:ci \
+            bash -lc '
+              printf "%s\\n" \
+                "CONFIG_TARGET_ipq806x=y" \
+                "CONFIG_TARGET_ipq806x_generic=y" \
+                "CONFIG_TARGET_ipq806x_generic_DEVICE_aruba_ap-325-v0=y" \
+                "CONFIG_TARGET_ROOTFS_INITRAMFS=y" \
+                "CONFIG_TARGET_ROOTFS_SQUASHFS=y" \
+                "CONFIG_DEVEL=y" \
+                "CONFIG_CCACHE=y" > .config
+
+              git config --global --add safe.directory /work
+              ./scripts/feeds update -a
+              ./scripts/feeds install -a
+              make defconfig
+              grep -Fx "CONFIG_TARGET_ipq806x_generic_DEVICE_aruba_ap-325-v0=y" .config
+              make download -j8
+              make -j"$(nproc)" V=s
+            '
+
+      - name: Verify v0 firmware images
+        run: |
+          set -eu
+          target_dir="bin/targets/ipq806x/generic"
+          find "$target_dir" -maxdepth 1 -type f -print
+          find "$target_dir" -maxdepth 1 -type f -name '*aruba_ap-325-v0*initramfs.ari' | grep -q .
+          find "$target_dir" -maxdepth 1 -type f -name '*aruba_ap-325-v0*squashfs-sysupgrade.bin' | grep -q .
+
+      - name: Collect firmware and build metadata
+        if: always()
+        run: |
+          set -eu
+          out_dir="$RUNNER_TEMP/ap325-v0-artifacts"
+          mkdir -p "$out_dir"
+          target_dir="bin/targets/ipq806x/generic"
+
+          if [ -d "$target_dir" ]; then
+            find "$target_dir" -maxdepth 1 -type f \
+              \( -name '*aruba_ap-325-v0*' \
+              -o -name '*ap-325-v0*' \
+              -o -name '*aruba_ap-32x-apboot.mbn' \
+              -o -name 'profiles.json' \
+              -o -name 'config.buildinfo' \
+              -o -name 'feeds.buildinfo' \
+              -o -name 'version.buildinfo' \) \
+              -exec cp -v {} "$out_dir/" \;
+          fi
+
+          git rev-parse HEAD > "$out_dir/source-commit.txt"
+          git status --short > "$out_dir/source-status.txt"
+          if [ -f .config ]; then
+            ./scripts/diffconfig.sh > "$out_dir/build.config"
+            cp .config "$out_dir/openwrt.config"
+          fi
+
+          (cd "$out_dir" && find . -maxdepth 1 -type f ! -name SHA256SUMS \
+            -print0 | xargs -0 -r sha256sum > SHA256SUMS)
+
+      - name: Upload firmware artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openwrt-ap325-v0-${{ github.sha }}
+          path: ${{ runner.temp }}/ap325-v0-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
